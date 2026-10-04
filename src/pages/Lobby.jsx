@@ -4,7 +4,7 @@ import {
   registerParticipant, 
   getCurrentParticipant, 
   getCompetitionState, 
-  subscribeToBroadcast 
+  subscribeToCompetitionState
 } from '../utils/storage';
 import { Play, Shield, Code2, Users, Clock, AlertTriangle, ArrowRight } from 'lucide-react';
 
@@ -15,7 +15,7 @@ export default function Lobby() {
   const [rollNo, setRollNo] = useState('');
   const [registered, setRegistered] = useState(false);
   const [participant, setParticipant] = useState(null);
-  const [compState, setCompState] = useState(getCompetitionState());
+  const [compState, setCompState] = useState({ status: 'WAITING', startedAt: null, endedAt: null });
 
   useEffect(() => {
     // Check if participant already in session
@@ -25,41 +25,40 @@ export default function Lobby() {
       setRegistered(true);
     }
 
-    // Subscribe to live broadcast events
-    const unsubscribe = subscribeToBroadcast((msg) => {
-      if (msg.type === 'COMPETITION_STARTED') {
-        setCompState({ status: 'RUNNING', startedAt: msg.payload?.startedAt || Date.now() });
-        navigate('/game');
-      } else if (msg.type === 'COMPETITION_ENDED' || msg.type === 'COMPETITION_RESET') {
-        setCompState(getCompetitionState());
+    // Load initial competition state
+    const loadInitialState = async () => {
+      try {
+        const state = await getCompetitionState();
+        setCompState(state);
+      } catch (err) {
+        console.error('Error loading competition state:', err);
       }
-    });
+    };
+    loadInitialState();
 
-    // Also interval check for cross-window reliability
-    const interval = setInterval(() => {
-      const state = getCompetitionState();
+    // Subscribe to competition state changes
+    const unsubscribe = subscribeToCompetitionState(async (state) => {
       setCompState(state);
       if (state.status === 'RUNNING' && registered) {
         navigate('/game');
       }
-    }, 1000);
+    });
 
     return () => {
       unsubscribe();
-      clearInterval(interval);
     };
   }, [registered, navigate]);
 
-  const handleRegister = (e) => {
+  const handleRegister = async (e) => {
     e.preventDefault();
     if (!name.trim() || !rollNo.trim()) return;
 
-    const newParticipant = registerParticipant(name, year, rollNo);
+    const newParticipant = await registerParticipant(name, year, rollNo);
     setParticipant(newParticipant);
     setRegistered(true);
 
     // If competition is already started by admin, go straight to game
-    const currentState = getCompetitionState();
+    const currentState = await getCompetitionState();
     if (currentState.status === 'RUNNING') {
       navigate('/game');
     }

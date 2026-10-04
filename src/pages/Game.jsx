@@ -19,7 +19,7 @@ import {
   getCurrentParticipant, 
   updateCurrentParticipantProgress,
   getCompetitionState,
-  subscribeToBroadcast
+  subscribeToCompetitionState
 } from '../utils/storage';
 import { SortableItem } from '../components/SortableItem';
 import { 
@@ -70,32 +70,36 @@ export default function Game() {
 
   // Initialize participant and challenges for their specific year
   useEffect(() => {
-    const current = getCurrentParticipant();
-    if (!current) {
-      navigate('/');
-      return;
-    }
-    setParticipant(current);
+    const initGame = async () => {
+      const current = getCurrentParticipant();
+      if (!current) {
+        navigate('/');
+        return;
+      }
+      setParticipant(current);
 
-    const questions = getChallenges(current.year);
-    if (!questions || questions.length === 0) {
-      alert(`No questions found for ${current.year}! Please ask Admin to configure questions.`);
-      navigate('/');
-      return;
-    }
-    setChallengesList(questions);
+      const questions = await getChallenges(current.year);
+      if (!questions || questions.length === 0) {
+        alert(`No questions found for ${current.year}! Please ask Admin to configure questions.`);
+        navigate('/');
+        return;
+      }
+      setChallengesList(questions);
 
-    // Set competition start time
-    const comp = getCompetitionState();
-    const start = comp.startedAt || current.startTime || Date.now();
-    setStartTime(start);
+      // Set competition start time
+      const comp = await getCompetitionState();
+      const start = comp.startedAt || current.startTime || Date.now();
+      setStartTime(start);
 
-    // Initial load of challenge 0
-    initChallenge(0, questions);
+      // Initial load of challenge 0
+      initChallenge(0, questions);
+    };
 
-    // Broadcast subscription in case admin resets competition
-    const unsubscribe = subscribeToBroadcast((msg) => {
-      if (msg.type === 'COMPETITION_RESET') {
+    initGame();
+
+    // Subscribe to competition state changes
+    const unsubscribe = subscribeToCompetitionState((state) => {
+      if (state.status === 'WAITING') {
         alert('The Admin has reset the competition.');
         navigate('/');
       }
@@ -170,10 +174,10 @@ export default function Game() {
     }
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     const newSolved = solvedCount + 1;
     setSolvedCount(newSolved);
-    updateCurrentParticipantProgress({
+    await updateCurrentParticipantProgress({
       solvedCount: newSolved,
       skippedCount,
       totalQuestions: challengesList.length
@@ -188,11 +192,10 @@ export default function Game() {
     }
   };
 
-  const handleSkip = () => {
-
+  const handleSkip = async () => {
     const newSkipped = skippedCount + 1;
     setSkippedCount(newSkipped);
-    updateCurrentParticipantProgress({
+    await updateCurrentParticipantProgress({
       solvedCount,
       skippedCount: newSkipped,
       totalQuestions: challengesList.length
@@ -207,12 +210,12 @@ export default function Game() {
     }
   };
 
-  const handleFinalFinish = (finalSolved, finalSkipped) => {
+  const handleFinalFinish = async (finalSolved, finalSkipped) => {
     const end = Date.now();
     const totalSecs = Math.max(1, Math.floor((end - (startTime || end)) / 1000));
     setGameFinished(true);
 
-    updateCurrentParticipantProgress({
+    await updateCurrentParticipantProgress({
       completed: true,
       solvedCount: finalSolved,
       skippedCount: finalSkipped,

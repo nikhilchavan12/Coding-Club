@@ -14,23 +14,24 @@ import {
   resetChallengesToDefault,
   getLeaderboardByYear,
   clearAllLeaderboardData,
-  subscribeToBroadcast
+  subscribeToCompetitionState,
+  subscribeToParticipants
 } from '../utils/storage';
-import { 
-  Shield, 
-  Lock, 
-  Play, 
-  Square, 
-  RotateCcw, 
-  Trophy, 
-  Plus, 
-  Trash2, 
-  Edit3, 
-  Code, 
-  LogOut, 
-  Users, 
-  CheckCircle, 
-  Clock, 
+import {
+  Shield,
+  Lock,
+  Play,
+  Square,
+  RotateCcw,
+  Trophy,
+  Plus,
+  Trash2,
+  Edit3,
+  Code,
+  LogOut,
+  Users,
+  CheckCircle,
+  Clock,
   FileText,
   Home
 } from 'lucide-react';
@@ -45,11 +46,12 @@ export default function Admin() {
   const [activeTab, setActiveTab] = useState('control');
 
   // Competition state
-  const [compState, setCompState] = useState(getCompetitionState());
+  const [compState, setCompState] = useState({ status: 'WAITING', startedAt: null, endedAt: null });
 
   // Question editor state
   const [questionYear, setQuestionYear] = useState('SY');
   const [challenges, setChallenges] = useState([]);
+  const [tyChallenges, setTyChallenges] = useState([]);
   const [editingId, setEditingId] = useState(null);
   const [qTitle, setQTitle] = useState('');
   const [qLanguage, setQLanguage] = useState('python');
@@ -59,6 +61,9 @@ export default function Admin() {
   // Leaderboard state
   const [leaderboardYear, setLeaderboardYear] = useState('SY');
   const [leaderboard, setLeaderboard] = useState([]);
+  const [tyLeaderboard, setTyLeaderboard] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     if (isAdminAuthenticated()) {
@@ -68,46 +73,86 @@ export default function Admin() {
 
   useEffect(() => {
     if (!authenticated) return;
-    loadChallenges(questionYear);
-    loadLeaderboard(leaderboardYear);
+    
+    setLoading(true);
+    setError(null);
 
-    const unsubscribe = subscribeToBroadcast((msg) => {
-      if (msg.type === 'COMPETITION_STARTED' || msg.type === 'COMPETITION_ENDED' || msg.type === 'COMPETITION_RESET') {
-        setCompState(getCompetitionState());
+    const loadData = async () => {
+      try {
+        // Load initial competition state
+        const initialState = await getCompetitionState();
+        setCompState(initialState);
+
+        await loadChallenges(questionYear);
+        await loadLeaderboard(leaderboardYear);
+
+        // Load TY data for stats
+        const tyChalls = await getChallenges('TY');
+        setTyChallenges(tyChalls);
+        const tyLb = await getLeaderboardByYear('TY');
+        setTyLeaderboard(tyLb);
+        setLoading(false);
+      } catch (err) {
+        console.error('Error loading admin data:', err);
+        setError('Failed to load data. Please check your Firebase connection.');
+        setLoading(false);
       }
-      if (msg.type === 'PARTICIPANT_REGISTERED' || msg.type === 'PARTICIPANT_UPDATED' || msg.type === 'LEADERBOARD_CLEARED') {
-        loadLeaderboard(leaderboardYear);
-      }
-      if (msg.type === 'CHALLENGES_UPDATED') {
-        loadChallenges(questionYear);
+    };
+
+    loadData();
+
+    // Subscribe to competition state changes
+    const unsubscribeCompState = subscribeToCompetitionState((state) => {
+      setCompState(state);
+    });
+
+    // Subscribe to participants changes for real-time leaderboard
+    const unsubscribeParticipants = subscribeToParticipants(async (participants) => {
+      try {
+        const leaderboard = await getLeaderboardByYear(leaderboardYear);
+        setLeaderboard(leaderboard);
+        const tyLb = await getLeaderboardByYear('TY');
+        setTyLeaderboard(tyLb);
+      } catch (err) {
+        console.error('Error updating leaderboard:', err);
       }
     });
 
-    const interval = setInterval(() => {
-      loadLeaderboard(leaderboardYear);
-      setCompState(getCompetitionState());
-    }, 2000);
-
     return () => {
-      unsubscribe();
-      clearInterval(interval);
+      unsubscribeCompState();
+      unsubscribeParticipants();
     };
-  }, [authenticated, questionYear, leaderboardYear]);
+  }, [authenticated, leaderboardYear]);
 
-  const loadChallenges = (year) => {
-    setChallenges(getChallenges(year));
+  // Load challenges when questionYear changes
+  useEffect(() => {
+    if (authenticated) {
+      loadChallenges(questionYear);
+    }
+  }, [authenticated, questionYear]);
+
+  const loadChallenges = async (year) => {
+    const challenges = await getChallenges(year);
+    setChallenges(challenges);
   };
 
-  const loadLeaderboard = (year) => {
-    setLeaderboard(getLeaderboardByYear(year));
+  const loadLeaderboard = async (year) => {
+    const leaderboard = await getLeaderboardByYear(year);
+    setLeaderboard(leaderboard);
   };
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
-    if (verifyAdminPassword(password)) {
-      setAuthenticated(true);
-      setAuthError(false);
-    } else {
+    try {
+      const isValid = await verifyAdminPassword(password);
+      if (isValid) {
+        setAuthenticated(true);
+        setAuthError(false);
+      } else {
+        setAuthError(true);
+      }
+    } catch (err) {
+      console.error('Login error:', err);
       setAuthError(true);
     }
   };
@@ -119,18 +164,18 @@ export default function Admin() {
   };
 
   // Competition Control actions
-  const handleStartComp = () => {
-    const newState = startCompetition();
+  const handleStartComp = async () => {
+    const newState = await startCompetition();
     setCompState(newState);
   };
 
-  const handleEndComp = () => {
-    const newState = endCompetition();
+  const handleEndComp = async () => {
+    const newState = await endCompetition();
     setCompState(newState);
   };
 
-  const handleResetComp = () => {
-    const newState = resetCompetition();
+  const handleResetComp = async () => {
+    const newState = await resetCompetition();
     setCompState(newState);
   };
 
@@ -152,12 +197,12 @@ export default function Admin() {
     setShowQuestionForm(true);
   };
 
-  const handleDeleteQuestion = (id) => {
-    const updated = deleteChallenge(questionYear, id);
+  const handleDeleteQuestion = async (id) => {
+    const updated = await deleteChallenge(questionYear, id);
     setChallenges(updated);
   };
 
-  const handleSaveQuestion = (e) => {
+  const handleSaveQuestion = async (e) => {
     e.preventDefault();
     if (!qTitle.trim() || !qCode.trim()) return;
 
@@ -171,19 +216,19 @@ export default function Admin() {
       code: lines
     };
 
-    saveChallenge(questionYear, challengePayload);
-    loadChallenges(questionYear);
+    await saveChallenge(questionYear, challengePayload);
+    await loadChallenges(questionYear);
     setShowQuestionForm(false);
     setEditingId(null);
   };
 
-  const handleResetDefaultQuestions = () => {
-    const defaults = resetChallengesToDefault(questionYear);
+  const handleResetDefaultQuestions = async () => {
+    const defaults = await resetChallengesToDefault(questionYear);
     setChallenges(defaults);
   };
 
-  const handleClearResults = () => {
-    clearAllLeaderboardData();
+  const handleClearResults = async () => {
+    await clearAllLeaderboardData();
     setLeaderboard([]);
   };
 
@@ -216,7 +261,7 @@ export default function Admin() {
                 <input
                   type="password"
                   className="input-field"
-                  placeholder="Enter admin password (default: admin123)"
+                  placeholder="Enter admin password "
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   autoFocus
@@ -246,6 +291,39 @@ export default function Admin() {
   }
 
   // =================== AUTHENTICATED DASHBOARD ===================
+  if (loading) {
+    return (
+      <div className="container" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="glass-panel text-center" style={{ padding: '2rem' }}>
+          <div style={{ fontSize: '1.2rem', color: 'var(--text-muted)' }}>
+            Loading Admin Dashboard...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="container" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="glass-panel text-center" style={{ padding: '2rem', maxWidth: '500px' }}>
+          <div style={{ color: '#ef4444', fontSize: '1.1rem', marginBottom: '1rem' }}>
+            Error Loading Dashboard
+          </div>
+          <div style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
+            {error}
+          </div>
+          <button 
+            className="btn btn-secondary" 
+            onClick={() => window.location.reload()}
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="container" style={{ maxWidth: '1050px', paddingBottom: '4rem' }}>
       {/* Admin Navbar */}
@@ -350,21 +428,21 @@ export default function Admin() {
             <div className="stat-card">
               <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>SY Questions Configured</div>
               <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#a78bfa' }}>
-                {getChallenges('SY').length} Questions
+                {challenges.length} Questions
               </div>
             </div>
 
             <div className="stat-card">
               <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>TY Questions Configured</div>
               <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#34d399' }}>
-                {getChallenges('TY').length} Questions
+                {tyChallenges.length} Questions
               </div>
             </div>
 
             <div className="stat-card">
               <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Total Submissions</div>
               <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: 'var(--primary-color)' }}>
-                {getLeaderboardByYear('SY').length + getLeaderboardByYear('TY').length}
+                {leaderboard.length + tyLeaderboard.length}
               </div>
             </div>
           </div>
@@ -381,13 +459,13 @@ export default function Admin() {
                 className={`year-toggle-btn ${questionYear === 'SY' ? 'active-sy' : ''}`}
                 onClick={() => setQuestionYear('SY')}
               >
-                SY Challenge Set ({getChallenges('SY').length})
+                SY Challenge Set ({challenges.length})
               </button>
               <button
                 className={`year-toggle-btn ${questionYear === 'TY' ? 'active-ty' : ''}`}
                 onClick={() => setQuestionYear('TY')}
               >
-                TY Challenge Set ({getChallenges('TY').length})
+                TY Challenge Set ({tyChallenges.length})
               </button>
             </div>
 
@@ -458,9 +536,9 @@ export default function Admin() {
                 </div>
 
                 <div className="flex" style={{ gap: '0.75rem', justifyContent: 'flex-end' }}>
-                  <button 
-                    type="button" 
-                    className="btn btn-secondary" 
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
                     onClick={() => setShowQuestionForm(false)}
                   >
                     Cancel
@@ -497,15 +575,15 @@ export default function Admin() {
                     </div>
 
                     <div className="flex" style={{ gap: '0.5rem' }}>
-                      <button 
-                        className="btn-icon" 
+                      <button
+                        className="btn-icon"
                         title="Edit question code"
                         onClick={() => handleEditQuestion(c)}
                       >
                         <Edit3 size={16} />
                       </button>
-                      <button 
-                        className="btn-icon text-danger" 
+                      <button
+                        className="btn-icon text-danger"
                         title="Delete question"
                         onClick={() => handleDeleteQuestion(c.id)}
                       >
@@ -544,8 +622,8 @@ export default function Admin() {
               </p>
             </div>
 
-            <button 
-              className="btn btn-secondary" 
+            <button
+              className="btn btn-secondary"
               style={{ color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.3)' }}
               onClick={handleClearResults}
             >
@@ -559,13 +637,13 @@ export default function Admin() {
               className={`year-toggle-btn ${leaderboardYear === 'SY' ? 'active-sy' : ''}`}
               onClick={() => setLeaderboardYear('SY')}
             >
-              🎓 SY Student Results ({getLeaderboardByYear('SY').length})
+              🎓 SY Student Results ({leaderboard.length})
             </button>
             <button
               className={`year-toggle-btn ${leaderboardYear === 'TY' ? 'active-ty' : ''}`}
               onClick={() => setLeaderboardYear('TY')}
             >
-              🎓 TY Student Results ({getLeaderboardByYear('TY').length})
+              🎓 TY Student Results ({tyLeaderboard.length})
             </button>
           </div>
 
